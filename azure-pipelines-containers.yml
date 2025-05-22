@@ -1,0 +1,116 @@
+trigger:
+  branches:
+    include:
+    - main
+
+pr:
+  branches:
+    include:
+    - main
+
+variables:
+  # Frontend variables
+  frontendAppName: '$(AZURE_FRONTEND_APP_NAME)'
+  frontendServiceConnection: '$(AZURE_FRONTEND_SERVICE_CONNECTION)'
+  
+  # Backend variables
+  backendAppName: '$(AZURE_BACKEND_APP_NAME)'
+  backendServiceConnection: '$(AZURE_BACKEND_SERVICE_CONNECTION)'
+  
+  # Container Registry
+  containerRegistry: '$(AZURE_CONTAINER_REGISTRY)'
+  
+  # Environment variables
+  environment: '$(ENVIRONMENT)'
+  
+  # Build configuration
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: 'Build stage'
+  jobs:
+  - job: BuildFrontend
+    displayName: 'Build Frontend Container'
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: Docker@2
+      displayName: 'Build and push frontend image'
+      inputs:
+        containerRegistry: '$(frontendServiceConnection)'
+        repository: 'frontend'
+        command: 'buildAndPush'
+        Dockerfile: 'Dockerfile'
+        buildContext: '.'
+        tags: |
+          $(Build.BuildId)
+          latest
+        arguments: '--build-arg NEXT_PUBLIC_API_URL=$(NEXT_PUBLIC_API_URL)'
+  
+  - job: BuildBackend
+    displayName: 'Build Backend Container'
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: Docker@2
+      displayName: 'Build and push backend image'
+      inputs:
+        containerRegistry: '$(backendServiceConnection)'
+        repository: 'backend'
+        command: 'buildAndPush'
+        Dockerfile: 'backend/Dockerfile'
+        buildContext: 'backend'
+        tags: |
+          $(Build.BuildId)
+          latest
+
+- stage: Deploy
+  displayName: 'Deploy stage'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployFrontend
+    displayName: 'Deploy Frontend'
+    environment: $(environment)
+    pool:
+      vmImage: $(vmImageName)
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: 'Deploy Frontend Container'
+            inputs:
+              azureSubscription: $(frontendServiceConnection)
+              appName: $(frontendAppName)
+              containers: $(containerRegistry)/frontend:$(Build.BuildId)
+  
+  - deployment: DeployBackend
+    displayName: 'Deploy Backend'
+    environment: $(environment)
+    pool:
+      vmImage: $(vmImageName)
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: 'Deploy Backend Container'
+            inputs:
+              azureSubscription: $(backendServiceConnection)
+              appName: $(backendAppName)
+              containers: $(containerRegistry)/backend:$(Build.BuildId)
+              appSettings: |
+                -POSTGRES_SERVER $(POSTGRES_SERVER)
+                -POSTGRES_USER $(POSTGRES_USER)
+                -POSTGRES_PASSWORD $(POSTGRES_PASSWORD)
+                -POSTGRES_DB $(POSTGRES_DB)
+                -AZURE_TENANT_ID $(AZURE_TENANT_ID)
+                -AZURE_CLIENT_ID $(AZURE_CLIENT_ID)
+                -AZURE_CLIENT_SECRET $(AZURE_CLIENT_SECRET)
+                -API_URL $(API_URL)
+                -FRONTEND_URL $(FRONTEND_URL)
+                -COOKIE_SECURE True
+                -SECRET_KEY $(SECRET_KEY)
+                -BACKEND_CORS_ORIGINS $(BACKEND_CORS_ORIGINS)
