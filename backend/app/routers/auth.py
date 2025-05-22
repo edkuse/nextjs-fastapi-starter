@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.models.user import User
 from app.core.auth import get_current_user, MICROSOFT_GRAPH_ENDPOINT
+from app.core.graph import get_graph_token
 import httpx
 
 router = APIRouter()
@@ -179,20 +180,61 @@ async def get_current_user_info(
         # Get user's profile picture URL from Microsoft Graph
         photo_url = f"{MICROSOFT_GRAPH_ENDPOINT}/users/{current_user.id}/photo/$value"
         
-        # Check if photo exists by making a HEAD request
+        # Log the attempt to get photo
+        logger.info(
+            f"Attempting to get user photo | User: {current_user.email} | "
+            f"Photo URL: {photo_url}"
+        )
+        
+        # Get a new token for Microsoft Graph API
+        access_token = await get_graph_token()
+        
+        # Check if photo exists by making a GET request
         async with httpx.AsyncClient() as client:
-            response = await client.head(photo_url, headers={"Authorization": f"Bearer {current_user.access_token}"})
+            response = await client.get(
+                photo_url, 
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            
+            # Log the response status and headers
+            logger.info(
+                f"Photo request response | Status: {response.status_code} | "
+                f"Headers: {dict(response.headers)}"
+            )
+            
             if response.status_code == 404:
+                logger.info(f"No photo found for user: {current_user.email}")
+                photo_url = None
+            elif response.status_code != 200:
+                logger.warning(
+                    f"Unexpected status code when fetching photo | "
+                    f"Status: {response.status_code} | "
+                    f"Response: {response.text}"
+                )
                 photo_url = None
                 
-        return {
+        user_info = {
             "id": current_user.id,
             "email": current_user.email,
             "name": current_user.name,
             "role": current_user.role,
-            "photoUrl": photo_url
+            "photoUrl": photo_url if photo_url else None
         }
+        
+        # Log the final user info being returned
+        logger.info(
+            f"Returning user info | User: {current_user.email} | "
+            f"Has photo: {photo_url is not None}"
+        )
+        
+        return user_info
     except Exception as e:
+        # Log any unexpected errors
+        logger.error(
+            f"Error getting user info | User: {current_user.email} | "
+            f"Error: {str(e)} | Type: {type(e).__name__}",
+            exc_info=True
+        )
         # If we can't get the photo URL, return user info without it
         return {
             "id": current_user.id,
